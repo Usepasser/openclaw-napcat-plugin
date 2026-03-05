@@ -32,12 +32,18 @@ function isRetryableNapCatError(err: any): boolean {
     return ["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EPIPE", "UND_ERR_SOCKET", "ECONNABORTED"].includes(code);
 }
 
-async function postJsonWithNodeHttp(url: string, payload: any, timeoutMs: number): Promise<{ statusCode: number; statusText: string; bodyText: string }> {
+async function postJsonWithNodeHttp(
+    url: string,
+    payload: any,
+    timeoutMs: number,
+    opts?: { connectionClose?: boolean }
+): Promise<{ statusCode: number; statusText: string; bodyText: string }> {
     const target = new URL(url);
     const isHttps = target.protocol === "https:";
     const body = JSON.stringify(payload);
     const transport = isHttps ? httpsRequest : httpRequest;
-    const agent = isHttps ? napcatHttpsAgent : napcatHttpAgent;
+    const connectionClose = opts?.connectionClose === true;
+    const agent = connectionClose ? undefined : (isHttps ? napcatHttpsAgent : napcatHttpAgent);
 
     return new Promise((resolve, reject) => {
         const req = transport(
@@ -51,7 +57,7 @@ async function postJsonWithNodeHttp(url: string, payload: any, timeoutMs: number
                 headers: {
                     "Content-Type": "application/json",
                     "Content-Length": Buffer.byteLength(body),
-                    "Connection": "keep-alive",
+                    "Connection": connectionClose ? "close" : "keep-alive",
                 },
             },
             (res) => {
@@ -82,16 +88,24 @@ async function postJsonWithNodeHttp(url: string, payload: any, timeoutMs: number
 async function sendToNapCat(url: string, payload: any) {
     const maxAttempts = 3;
     const timeoutsMs = [5000, 7000, 9000];
+    const cfg = getNapCatConfig();
+    const connectionClose = cfg.connectionClose !== false; // default true for local docker stability
+    const target = new URL(url);
+    const targetInfo = `${target.protocol}//${target.hostname}:${target.port || (target.protocol === "https:" ? "443" : "80")}${target.pathname}`;
 
     let lastErr: any = null;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        const startedAt = Date.now();
         try {
             const timeoutMs = timeoutsMs[Math.min(attempt - 1, timeoutsMs.length - 1)];
-            const res = await postJsonWithNodeHttp(url, payload, timeoutMs);
+            const res = await postJsonWithNodeHttp(url, payload, timeoutMs, { connectionClose });
 
             if (res.statusCode < 200 || res.statusCode >= 300) {
                 throw new Error(`NapCat API Error: ${res.statusCode} ${res.statusText}${res.bodyText ? ` | ${res.bodyText.slice(0, 300)}` : ""}`);
             }
+
+            const elapsedMs = Date.now() - startedAt;
+            console.log(`[NapCat] sendToNapCat success attempt ${attempt}/${maxAttempts} ${targetInfo} in ${elapsedMs}ms (connection=${connectionClose ? "close" : "keep-alive"})`);
 
             if (!res.bodyText) return { status: "ok" };
             try {
@@ -102,9 +116,13 @@ async function sendToNapCat(url: string, payload: any) {
         } catch (err: any) {
             lastErr = err;
             const retryable = isRetryableNapCatError(err);
-            if (!retryable || attempt >= maxAttempts) break;
+            const elapsedMs = Date.now() - startedAt;
+            if (!retryable || attempt >= maxAttempts) {
+                console.error(`[NapCat] sendToNapCat failed attempt ${attempt}/${maxAttempts} ${targetInfo} in ${elapsedMs}ms: ${err?.cause?.code || err?.code || err}`);
+                break;
+            }
             const backoffMs = attempt * 400;
-            console.warn(`[NapCat] sendToNapCat retry ${attempt}/${maxAttempts} after ${backoffMs}ms due to ${err?.cause?.code || err?.code || err}`);
+            console.warn(`[NapCat] sendToNapCat retry ${attempt}/${maxAttempts} ${targetInfo} in ${elapsedMs}ms; backoff ${backoffMs}ms; reason=${err?.cause?.code || err?.code || err}`);
             await sleep(backoffMs);
         }
     }
@@ -601,8 +619,12 @@ export async function handleNapCatWebhook(req: IncomingMessage, res: ServerRespo
                         else msgPayload.user_id = targetId;
                         
                         console.log(`[NapCat] Sending reply to ${isGroup ? 'group' : 'private'} ${targetId}: ${message.substring(0, 50)}...`);
-                        await sendToNapCat(`${baseUrl}${endpoint}`, msgPayload);
-                        console.log("[NapCat] Reply sent successfully");
+                        try {
+                            await sendToNapCat(`${baseUrl}${endpoint}`, msgPayload);
+                            console.log("[NapCat] Reply sent successfully");
+                        } catch (err) {
+                            console.error("[NapCat] Reply delivery failed (suppressed to avoid channel crash):", err);
+                        }
                     },
                     onError: (err, info) => {
                         console.error(`[NapCat] Reply error (${info.kind}):`, err);
@@ -634,8 +656,12 @@ export async function handleNapCatWebhook(req: IncomingMessage, res: ServerRespo
                         else msgPayload.user_id = targetId;
                         
                         console.log(`[NapCat] Sending reply to ${isGroup ? 'group' : 'private'} ${targetId}: ${message.substring(0, 50)}...`);
-                        await sendToNapCat(`${baseUrl}${endpoint}`, msgPayload);
-                        console.log("[NapCat] Reply sent successfully");
+                        try {
+                            await sendToNapCat(`${baseUrl}${endpoint}`, msgPayload);
+                            console.log("[NapCat] Reply sent successfully");
+                        } catch (err) {
+                            console.error("[NapCat] Reply delivery failed (suppressed to avoid channel crash):", err);
+                        }
                     },
                     onError: (err, info) => {
                         console.error(`[NapCat] Reply error (${info.kind}):`, err);
