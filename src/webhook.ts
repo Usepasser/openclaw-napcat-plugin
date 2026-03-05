@@ -7,17 +7,54 @@ import { getNapCatRuntime, getNapCatConfig } from "./runtime.js";
 // Group name cache removed
 
 
-// Simple function to send message via NapCat API
+function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableNapCatError(err: any): boolean {
+    const code = String(err?.cause?.code || err?.code || "");
+    return ["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EPIPE", "UND_ERR_SOCKET"].includes(code);
+}
+
+// Simple function to send message via NapCat API (with retry for transient socket errors)
 async function sendToNapCat(url: string, payload: any) {
-    const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-    });
-    if (!res.ok) {
-        throw new Error(`NapCat API Error: ${res.status} ${res.statusText}`);
+    const maxAttempts = 3;
+    const timeoutsMs = [5000, 7000, 9000];
+
+    let lastErr: any = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            const timeoutMs = timeoutsMs[Math.min(attempt - 1, timeoutsMs.length - 1)];
+            const res = await fetch(url, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+                signal: AbortSignal.timeout(timeoutMs),
+            });
+
+            if (!res.ok) {
+                const bodyText = await res.text().catch(() => "");
+                throw new Error(`NapCat API Error: ${res.status} ${res.statusText}${bodyText ? ` | ${bodyText.slice(0, 300)}` : ""}`);
+            }
+
+            const text = await res.text();
+            if (!text) return { status: "ok" };
+            try {
+                return JSON.parse(text);
+            } catch {
+                return { status: "ok", raw: text };
+            }
+        } catch (err: any) {
+            lastErr = err;
+            const retryable = isRetryableNapCatError(err);
+            if (!retryable || attempt >= maxAttempts) break;
+            const backoffMs = attempt * 400;
+            console.warn(`[NapCat] sendToNapCat retry ${attempt}/${maxAttempts} after ${backoffMs}ms due to ${err?.cause?.code || err?.code || err}`);
+            await sleep(backoffMs);
+        }
     }
-    return await res.json();
+
+    throw lastErr;
 }
 
 function buildMediaProxyUrl(mediaUrl: string, config: any): string {
