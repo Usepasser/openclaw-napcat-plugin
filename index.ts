@@ -16,7 +16,11 @@ const plugin = {
     // Compatibility: old SDKs expose registerHttpHandler, newer SDKs prefer registerHttpRoute.
     const anyApi = api as any;
     if (typeof anyApi.registerHttpRoute === "function") {
-      anyApi.registerHttpRoute({ path: "/napcat", handler: handleNapCatWebhook });
+      anyApi.registerHttpRoute({
+        path: "/napcat",
+        handler: handleNapCatWebhook,
+        auth: "plugin",
+      });
     } else if (typeof anyApi.registerHttpHandler === "function") {
       anyApi.registerHttpHandler(handleNapCatWebhook);
     } else {
