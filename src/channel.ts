@@ -1,4 +1,7 @@
 // Minimal NapCat Channel Implementation
+import path from "node:path";
+import { access } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { setNapCatConfig } from "./runtime.js";
 
 async function sendToNapCat(url: string, payload: any) {
@@ -11,6 +14,64 @@ async function sendToNapCat(url: string, payload: any) {
         throw new Error(`NapCat API Error: ${res.status} ${res.statusText}`);
     }
     return await res.json();
+}
+
+async function uploadGroupFileToNapCat(url: string, payload: {
+    groupId: string;
+    filePath: string;
+    fileName: string;
+    folder?: string;
+}) {
+    const form = new FormData();
+    form.set("group_id", payload.groupId);
+    form.set("file", payload.filePath);
+    form.set("name", payload.fileName);
+    if (payload.folder) form.set("folder", payload.folder);
+
+    const res = await fetch(url, {
+        method: "POST",
+        body: form,
+    });
+    if (!res.ok) {
+        throw new Error(`NapCat API Error: ${res.status} ${res.statusText}`);
+    }
+    return await res.json();
+}
+
+function isLikelyLocalPath(input: string): boolean {
+    if (!input) return false;
+    if (input.startsWith("/")) return true;
+    if (/^[A-Za-z]:[\\/]/.test(input)) return true;
+    if (input.startsWith("./") || input.startsWith("../")) return true;
+    return false;
+}
+
+function resolveLocalFilePath(mediaUrl: string): string | null {
+    const trimmed = mediaUrl.trim();
+    if (!trimmed) return null;
+
+    if (trimmed.startsWith("file://")) {
+        return fileURLToPath(trimmed);
+    }
+
+    if (isLikelyLocalPath(trimmed)) {
+        return path.resolve(trimmed);
+    }
+
+    return null;
+}
+
+async function ensureReadableFile(filePath: string): Promise<void> {
+    await access(filePath);
+}
+
+function isNapCatGroupFileCandidate(mediaUrl: string): boolean {
+    if (!mediaUrl) return false;
+    if (/^https?:\/\//i.test(mediaUrl)) return false;
+    const lower = mediaUrl.toLowerCase();
+    if (isAudioMedia(lower)) return false;
+    if (/\.(png|jpe?g|gif|webp|bmp|svg)(?:\?.*)?$/i.test(lower)) return false;
+    return true;
 }
 
 function buildMediaProxyUrl(mediaUrl: string, config: any): string {
@@ -145,6 +206,12 @@ export const napcatPlugin = {
                 description: "Base directory for relative audio files (e.g. /tmp/napcat-voice)",
                 default: ""
             },
+            groupFileFolder: {
+                type: "string",
+                title: "Group File Default Folder",
+                description: "Optional NapCat group file folder path used by /upload_group_file",
+                default: ""
+            },
             enableInboundLogging: {
                 type: "boolean",
                 title: "Enable Inbound Message Logging",
@@ -240,7 +307,43 @@ export const napcatPlugin = {
 
             const endpoint = targetType === "group" ? "/send_group_msg" : "/send_private_msg";
 
-            // Basic media support: try CQ image format, fallback to plain URL.
+            const isGroupFile =
+                targetType === "group" &&
+                !!mediaUrl &&
+                isNapCatGroupFileCandidate(mediaUrl);
+
+            if (isGroupFile) {
+                try {
+                    const localFilePath = resolveLocalFilePath(mediaUrl!);
+                    if (!localFilePath) {
+                        throw new Error("Group file upload requires a local path or file:// URL");
+                    }
+                    await ensureReadableFile(localFilePath);
+                    const fileName = path.basename(localFilePath);
+                    const folder = String(config.groupFileFolder || "").trim();
+
+                    const uploadResult = await uploadGroupFileToNapCat(`${baseUrl}/upload_group_file`, {
+                        groupId: targetId,
+                        filePath: localFilePath,
+                        fileName,
+                        folder: folder || undefined,
+                    });
+
+                    if (text && text.trim()) {
+                        await sendToNapCat(`${baseUrl}${endpoint}`, {
+                            group_id: targetId,
+                            message: text,
+                        });
+                    }
+
+                    console.log(`[NapCat] Uploaded group file to ${targetId}: ${localFilePath}`);
+                    return { ok: true, result: uploadResult };
+                } catch (err: any) {
+                    return { ok: false, error: err.message };
+                }
+            }
+
+            // Basic media support: try CQ image/record format.
             const mediaMessage = mediaUrl
                 ? buildNapCatMediaCq(mediaUrl, config)
                 : "";

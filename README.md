@@ -10,7 +10,8 @@ QQ 聊天通道插件 for OpenClaw，基于 NapCat (OneBot 11) 实现。
 - ✅ 接收私聊和群组消息
 - ✅ 支持文本消息收发
 - ✅ 支持群聊/私聊 sessionKey 路由
-- ✅ 支持图片等媒体发送（CQ:image）
+- ✅ 支持图片等媒体发送（CQ:image / CQ:record）
+- ✅ 支持通过 message 工具向 QQ 群发送文件（upload_group_file）
 - ✅ 可配置的接收用户白名单
 - ✅ 完整的消息路由和会话管理
 - ✅ 与 OpenClaw 无缝集成
@@ -73,6 +74,7 @@ git clone https://github.com/ProperSAMA/openclaw-napcat-plugin.git
 | `publicBaseUrl` | string | OpenClaw 对 NapCat 可达的地址（如 `http://127.0.0.1:18789`） | `""` |
 | `mediaProxyToken` | string | 媒体代理可选访问令牌 | `""` |
 | `voiceBasePath` | string | 相对语音文件名的基础目录（例如 `/tmp/napcat-voice`） | `""` |
+| `groupFileFolder` | string | 群文件默认目录（NapCat `/upload_group_file` 的 `folder` 参数，可空） | `""` |
 
 **群消息说明：**
 - `enableGroupMessages: false`（默认）：完全忽略群消息
@@ -133,6 +135,28 @@ Http 客户端
 - 当 `mediaUrl` 是音频后缀（如 `.wav`）时，插件会自动按语音消息发送（`CQ:record`）。
 - 若 `mediaUrl` 是相对文件名（如 `test.wav`），会自动拼接 `voiceBasePath`（例如 `/tmp/napcat-voice/test.wav`）。
 - 开启媒体代理后，语音文件也会走 `/napcat/media`，适合 OpenClaw 与 NapCat 分机部署。
+
+## 群文件发送（message 工具）
+
+当目标是群聊（`group:<群号>` 或 `session:napcat:group:<群号>`）且 `media/path/filePath` 指向**本地文件路径**时，插件会自动走 NapCat 的 `/upload_group_file`：
+
+- 支持：绝对路径、相对路径、`file://` URL
+- 当前不支持：HTTP/HTTPS 远程文件直接上传（会返回错误）
+- 图片/语音仍按原逻辑发送为 `CQ:image` / `CQ:record`
+
+示例：
+
+```json
+{
+  "action": "send",
+  "channel": "napcat",
+  "target": "group:123456789",
+  "message": "这是本次日报文件",
+  "filePath": "/tmp/daily-report.pdf"
+}
+```
+
+> 可选：在 `channels.napcat.groupFileFolder` 设置群文件默认目录（对应 NapCat API 的 `folder` 字段）。
 
 ## Skill（napcat-qq）
 
