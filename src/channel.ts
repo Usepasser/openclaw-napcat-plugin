@@ -1,7 +1,7 @@
 // Minimal NapCat Channel Implementation
 import path from "node:path";
 import { access, copyFile, mkdir, unlink } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
+import { buildNapCatMediaCq, isAudioMedia, isLikelyLocalPath, resolveLocalFilePath } from "./media.js";
 import { setNapCatConfig } from "./runtime.js";
 
 async function sendToNapCat(url: string, payload: any) {
@@ -41,29 +41,6 @@ async function uploadGroupFileToNapCat(url: string, payload: {
     return await sendToNapCat(url, requestPayload);
 }
 
-function isLikelyLocalPath(input: string): boolean {
-    if (!input) return false;
-    if (input.startsWith("/")) return true;
-    if (/^[A-Za-z]:[\\/]/.test(input)) return true;
-    if (input.startsWith("./") || input.startsWith("../")) return true;
-    return false;
-}
-
-function resolveLocalFilePath(mediaUrl: string): string | null {
-    const trimmed = mediaUrl.trim();
-    if (!trimmed) return null;
-
-    if (trimmed.startsWith("file://")) {
-        return fileURLToPath(trimmed);
-    }
-
-    if (isLikelyLocalPath(trimmed)) {
-        return path.resolve(trimmed);
-    }
-
-    return null;
-}
-
 async function ensureReadableFile(filePath: string): Promise<void> {
     await access(filePath);
 }
@@ -96,39 +73,6 @@ function isNapCatGroupFileCandidate(mediaUrl: string): boolean {
     if (isAudioMedia(lower)) return false;
     if (/\.(png|jpe?g|gif|webp|bmp|svg)(?:\?.*)?$/i.test(lower)) return false;
     return true;
-}
-
-function buildMediaProxyUrl(mediaUrl: string, config: any): string {
-    const enabled = config.mediaProxyEnabled === true;
-    const baseUrl = String(config.publicBaseUrl || "").trim().replace(/\/+$/, "");
-    if (!enabled || !baseUrl) return mediaUrl;
-
-    const token = String(config.mediaProxyToken || "").trim();
-    const query = new URLSearchParams({ url: mediaUrl });
-    if (token) query.set("token", token);
-    return `${baseUrl}/napcat/media?${query.toString()}`;
-}
-
-function isAudioMedia(mediaUrl: string): boolean {
-    return /\.(wav|mp3|amr|silk|ogg|m4a|flac|aac)(?:\?.*)?$/i.test(mediaUrl);
-}
-
-function resolveVoiceMediaUrl(mediaUrl: string, config: any): string {
-    const trimmed = mediaUrl.trim();
-    if (!trimmed) return trimmed;
-    if (/^(https?:\/\/|file:\/\/)/i.test(trimmed) || trimmed.startsWith("/")) {
-        return trimmed;
-    }
-    const voiceBasePath = String(config.voiceBasePath || "").trim().replace(/\/+$/, "");
-    if (!voiceBasePath) return trimmed;
-    return `${voiceBasePath}/${trimmed.replace(/^\/+/, "")}`;
-}
-
-function buildNapCatMediaCq(mediaUrl: string, config: any): string {
-    const resolvedUrl = isAudioMedia(mediaUrl) ? resolveVoiceMediaUrl(mediaUrl, config) : mediaUrl;
-    const proxiedMediaUrl = buildMediaProxyUrl(resolvedUrl, config);
-    const type = isAudioMedia(resolvedUrl) ? "record" : "image";
-    return `[CQ:${type},file=${proxiedMediaUrl}]`;
 }
 
 function normalizeNapCatTarget(raw: string): string {
@@ -425,7 +369,7 @@ export const napcatPlugin = {
 
             // Basic media support: try CQ image/record format.
             const mediaMessage = mediaUrl
-                ? buildNapCatMediaCq(mediaUrl, config)
+                ? await buildNapCatMediaCq(mediaUrl, config)
                 : "";
             const message = text
                 ? (mediaMessage ? `${text}\n${mediaMessage}` : text)

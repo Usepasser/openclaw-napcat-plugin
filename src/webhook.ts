@@ -4,6 +4,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { createReadStream } from "node:fs";
 import { appendFile, mkdir, stat } from "node:fs/promises";
 import { dirname, extname, resolve } from "node:path";
+import { buildNapCatMediaCq } from "./media.js";
 import { getNapCatRuntime, getNapCatConfig } from "./runtime.js";
 
 // Group name cache removed
@@ -130,41 +131,7 @@ async function sendToNapCat(url: string, payload: any) {
     throw lastErr;
 }
 
-function buildMediaProxyUrl(mediaUrl: string, config: any): string {
-    const enabled = config.mediaProxyEnabled === true;
-    const baseUrl = String(config.publicBaseUrl || "").trim().replace(/\/+$/, "");
-    if (!enabled || !baseUrl) return mediaUrl;
-
-    const token = String(config.mediaProxyToken || "").trim();
-    const query = new URLSearchParams({ url: mediaUrl });
-    if (token) query.set("token", token);
-    return `${baseUrl}/napcat/media?${query.toString()}`;
-}
-
-function isAudioMedia(mediaUrl: string): boolean {
-    return /\.(wav|mp3|amr|silk|ogg|m4a|flac|aac)(?:\?.*)?$/i.test(mediaUrl);
-}
-
-function resolveVoiceMediaUrl(mediaUrl: string, config: any): string {
-    const trimmed = mediaUrl.trim();
-    if (!trimmed) return trimmed;
-    if (/^(https?:\/\/|file:\/\/)/i.test(trimmed) || trimmed.startsWith("/")) {
-        return trimmed;
-    }
-    const voiceBasePath = String(config.voiceBasePath || "").trim().replace(/\/+$/, "");
-    if (!voiceBasePath) return trimmed;
-    return `${voiceBasePath}/${trimmed.replace(/^\/+/, "")}`;
-}
-
-function buildNapCatMediaCq(mediaUrl: string, config: any, forceVoice = false): string {
-    const shouldUseVoice = forceVoice || isAudioMedia(mediaUrl);
-    const resolvedUrl = shouldUseVoice ? resolveVoiceMediaUrl(mediaUrl, config) : mediaUrl;
-    const proxiedMediaUrl = buildMediaProxyUrl(resolvedUrl, config);
-    const type = shouldUseVoice ? "record" : "image";
-    return `[CQ:${type},file=${proxiedMediaUrl}]`;
-}
-
-function buildNapCatMessageFromReply(
+async function buildNapCatMessageFromReply(
     payload: { text?: string; mediaUrl?: string; mediaUrls?: string[]; audioAsVoice?: boolean },
     config: any
 ) {
@@ -173,10 +140,12 @@ function buildNapCatMessageFromReply(
         ...(payload.mediaUrls || []),
         ...(payload.mediaUrl ? [payload.mediaUrl] : [])
     ];
-    const mediaSegments = mediaCandidates
-        .map((url) => String(url || "").trim())
-        .filter(Boolean)
-        .map((url) => buildNapCatMediaCq(url, config, payload.audioAsVoice === true));
+    const mediaSegments = await Promise.all(
+        mediaCandidates
+            .map((url) => String(url || "").trim())
+            .filter(Boolean)
+            .map((url) => buildNapCatMediaCq(url, config, payload.audioAsVoice === true))
+    );
 
     if (text && mediaSegments.length > 0) return `${text}\n${mediaSegments.join("\n")}`;
     if (text) return text;
@@ -609,7 +578,7 @@ export async function handleNapCatWebhook(req: IncomingMessage, res: ServerRespo
                         const isGroup = conversationId.startsWith("group:");
                         const targetId = isGroup ? conversationId.replace("group:", "") : conversationId.replace("private:", "");
                         const endpoint = isGroup ? "/send_group_msg" : "/send_private_msg";
-                        const message = buildNapCatMessageFromReply(payload, config);
+                        const message = await buildNapCatMessageFromReply(payload, config);
                         if (!message) {
                             console.log("[NapCat] Skip empty reply payload");
                             return;
@@ -646,7 +615,7 @@ export async function handleNapCatWebhook(req: IncomingMessage, res: ServerRespo
                         const isGroup = conversationId.startsWith("group:");
                         const targetId = isGroup ? conversationId.replace("group:", "") : conversationId.replace("private:", "");
                         const endpoint = isGroup ? "/send_group_msg" : "/send_private_msg";
-                        const message = buildNapCatMessageFromReply(payload, config);
+                        const message = await buildNapCatMessageFromReply(payload, config);
                         if (!message) {
                             console.log("[NapCat] Skip empty reply payload");
                             return;
