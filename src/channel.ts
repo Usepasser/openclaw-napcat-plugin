@@ -117,7 +117,11 @@ export const napcatPlugin = {
     capabilities: {
         chatTypes: ["direct", "group"],
         text: true,
-        media: true
+        media: true,
+        blockStreaming: true
+    },
+    streaming: {
+        blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 }
     },
     messaging: {
         normalizeTarget: normalizeNapCatTarget,
@@ -147,6 +151,12 @@ export const napcatPlugin = {
                 type: "boolean",
                 title: "Enable Group Messages",
                 description: "When enabled, process group messages (requires mention to trigger)",
+                default: false
+            },
+            streaming_mode: {
+                type: "boolean",
+                title: "Streaming Mode",
+                description: "Stream replies as incremental QQ messages instead of waiting for the final combined response",
                 default: false
             },
             groupMentionOnly: {
