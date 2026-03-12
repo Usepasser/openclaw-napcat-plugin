@@ -14,6 +14,10 @@ function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function isNapCatStreamingModeEnabled(config: any): boolean {
+    return config?.streaming_mode === true;
+}
+
 const napcatHttpAgent = new HttpAgent({
     keepAlive: true,
     keepAliveMsecs: 10000,
@@ -570,6 +574,8 @@ export async function handleNapCatWebhook(req: IncomingMessage, res: ServerRespo
 
             // Create dispatcher for replies
             let dispatcher = null;
+            let dispatcherReplyOptions: Record<string, unknown> = {};
+            let markDispatchIdle: (() => void) | null = null;
             
             // Store conversationId for reply routing
             const replyTarget = conversationId;
@@ -613,6 +619,8 @@ export async function handleNapCatWebhook(req: IncomingMessage, res: ServerRespo
                     onIdle: () => {},
                 });
                 dispatcher = result.dispatcher;
+                dispatcherReplyOptions = result.replyOptions || {};
+                markDispatchIdle = result.markDispatchIdle || null;
             } else if (runtime.channel.reply.createReplyDispatcher) {
                 dispatcher = runtime.channel.reply.createReplyDispatcher({
                     responsePrefix: "",
@@ -661,12 +669,19 @@ export async function handleNapCatWebhook(req: IncomingMessage, res: ServerRespo
             console.log("[NapCat] Dispatcher created, methods:", Object.keys(dispatcher));
 
             // Dispatch the message to OpenClaw
-            await runtime.channel.reply.dispatchReplyFromConfig({
-                ctx: ctxPayload,
-                cfg,
-                dispatcher,
-                replyOptions: {},
-            });
+            try {
+                await runtime.channel.reply.dispatchReplyFromConfig({
+                    ctx: ctxPayload,
+                    cfg,
+                    dispatcher,
+                    replyOptions: {
+                        ...dispatcherReplyOptions,
+                        disableBlockStreaming: !isNapCatStreamingModeEnabled(config),
+                    },
+                });
+            } finally {
+                markDispatchIdle?.();
+            }
             
             res.statusCode = 200;
             res.setHeader("Content-Type", "application/json");

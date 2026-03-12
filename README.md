@@ -124,6 +124,7 @@ openclaw plugins install /Users/yourname/Documents/openclaw-napcat-plugin
     "napcat": {
       "enabled": true,
       "url": "http://127.0.0.1:3000",
+      "streaming_mode": false,
       "enableGroupMessages": true,
       "groupMentionOnly": true
     }
@@ -144,6 +145,7 @@ openclaw plugins install /Users/yourname/Documents/openclaw-napcat-plugin
 
 - 启用 `napcat` 通道
 - NapCat 的 HTTP 服务地址是 `http://127.0.0.1:3000`
+- `streaming_mode` 为 `true` 时会改成流式回复，每处理一步就发一条 QQ 消息
 - 允许处理群消息
 - 但群里必须 **@ 机器人** 才会回复
 
@@ -620,6 +622,7 @@ node skill/napcat-qq/scripts/qq-contact-search.js 老王 private
 | `agentId` | string | 固定把消息交给哪个 OpenClaw agent 处理 | `""` |
 | `allowUsers` | string[] | 只允许这些 QQ 号触发机器人；空数组表示不过滤 | `[]` |
 | `enableGroupMessages` | boolean | 是否处理群消息 | `false` |
+| `streaming_mode` | boolean | 是否启用流式传输模式；开启后会按处理步骤连续发送 QQ 消息 | `false` |
 | `groupMentionOnly` | boolean | 群里是否必须 @ 机器人才处理 | `true` |
 | `mediaProxyEnabled` | boolean | 是否开启媒体代理，解决跨机器图片/语音发送问题 | `false` |
 | `publicBaseUrl` | string | OpenClaw 对 NapCat 可访问的地址 | `""` |
