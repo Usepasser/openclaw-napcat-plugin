@@ -133,7 +133,7 @@ export const napcatPlugin = {
     configSchema: {
         type: "object",
         properties: {
-            url: { type: "string", title: "NapCat HTTP URL", default: "http://127.0.0.1:3000" },
+            url: { type: "string", title: "NapCat HTTP URL", default: "http://127.0.0.1:15150" },
             agentId: {
                 type: "string",
                 title: "Fixed Agent ID",
@@ -265,7 +265,7 @@ export const napcatPlugin = {
         deliveryMode: "direct",
         sendText: async ({ to, text, cfg }: any) => {
             const config = cfg.channels?.napcat || {};
-            const baseUrl = config.url || "http://127.0.0.1:3000";
+            const baseUrl = config.url || "http://127.0.0.1:15150";
             const token = String(config.token || "").trim();
             
             let targetType = "private";
@@ -307,7 +307,7 @@ export const napcatPlugin = {
         },
         sendMedia: async ({ to, text, mediaUrl, cfg }: any) => {
             const config = cfg.channels?.napcat || {};
-            const baseUrl = config.url || "http://127.0.0.1:3000";
+            const baseUrl = config.url || "http://127.0.0.1:15150";
             const token = String(config.token || "").trim();
 
             let targetType = "private";

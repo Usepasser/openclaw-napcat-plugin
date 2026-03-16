@@ -345,7 +345,7 @@ async function fetchNapCatForwardEntries(
         return cache.get(normalizedId) ?? null;
     }
 
-    const baseUrl = String(config.url || "http://127.0.0.1:3000").trim().replace(/\/+$/, "");
+    const baseUrl = String(config.url || "http://127.0.0.1:15150").trim().replace(/\/+$/, "");
     const token = String(config.token || "").trim();
 
     try {
@@ -825,7 +825,7 @@ export async function handleNapCatWebhook(req: IncomingMessage, res: ServerRespo
                         console.log("[NapCat] Reply to deliver:", JSON.stringify(payload).substring(0, 100));
                         // Actually send the message via NapCat API
                         const config = getNapCatConfig();
-                        const baseUrl = config.url || "http://127.0.0.1:3000";
+                        const baseUrl = config.url || "http://127.0.0.1:15150";
                         const token = String(config.token || "").trim();
                         const isGroup = conversationId.startsWith("group:");
                         const targetId = isGroup ? conversationId.replace("group:", "") : conversationId.replace("private:", "");
@@ -865,7 +865,7 @@ export async function handleNapCatWebhook(req: IncomingMessage, res: ServerRespo
                         console.log("[NapCat] Reply to deliver:", JSON.stringify(payload).substring(0, 100));
                         // Actually send the message via NapCat API
                         const config = getNapCatConfig();
-                        const baseUrl = config.url || "http://127.0.0.1:3000";
+                        const baseUrl = config.url || "http://127.0.0.1:15150";
                         const token = String(config.token || "").trim();
                         const isGroup = conversationId.startsWith("group:");
                         const targetId = isGroup ? conversationId.replace("group:", "") : conversationId.replace("private:", "");

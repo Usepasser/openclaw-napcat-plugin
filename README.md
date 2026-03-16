@@ -124,7 +124,7 @@ openclaw plugins install /Users/yourname/Documents/openclaw-napcat-plugin
   "channels": {
     "napcat": {
       "enabled": true,
-      "url": "http://127.0.0.1:3000",
+      "url": "http://127.0.0.1:15150",
       "streaming_mode": false,
       "enableGroupMessages": true,
       "groupWhitelist": [],
@@ -146,7 +146,7 @@ openclaw plugins install /Users/yourname/Documents/openclaw-napcat-plugin
 它的意思是：
 
 - 启用 `napcat` 通道
-- NapCat 的 HTTP 服务地址是 `http://127.0.0.1:3000`
+- NapCat 的 HTTP 服务地址是 `http://127.0.0.1:15150`
 - `streaming_mode` 为 `true` 时会改成流式回复，每处理一步就发一条 QQ 消息
 - 允许处理群消息
 - `groupWhitelist` 留空时不过滤群；填了之后只响应指定群
@@ -169,7 +169,7 @@ openclaw gateway restart
 #### A. Http 服务器
 
 - Host: `0.0.0.0`
-- Port: `3000`
+- Port: `15150`
 
 #### B. Http 客户端
 
@@ -213,7 +213,7 @@ http://192.168.1.10:18789/napcat
   "channels": {
     "napcat": {
       "enabled": true,
-      "url": "http://127.0.0.1:3000",
+      "url": "http://127.0.0.1:15150",
       "allowUsers": ["123456789", "987654321"],
       "enableGroupMessages": true,
       "groupMentionOnly": true
@@ -240,7 +240,7 @@ http://192.168.1.10:18789/napcat
   "channels": {
     "napcat": {
       "enabled": true,
-      "url": "http://127.0.0.1:3000",
+      "url": "http://127.0.0.1:15150",
       "enableGroupMessages": true,
       "groupWhitelist": ["123456789", "987654321"],
       "groupMentionOnly": true
@@ -417,7 +417,7 @@ test.wav
 {
   "channels": {
     "napcat": {
-      "url": "http://192.168.1.20:3000",
+      "url": "http://192.168.1.20:15150",
       "mediaProxyEnabled": true,
       "publicBaseUrl": "http://192.168.1.10:18789",
       "mediaProxyToken": "change-me"
@@ -428,7 +428,7 @@ test.wav
 
 意思是：
 
-- NapCat 在 `192.168.1.20:3000`
+- NapCat 在 `192.168.1.20:15150`
 - OpenClaw 对 NapCat 可访问的地址是 `192.168.1.10:18789`
 - 插件会把媒体地址改写成 `http://192.168.1.10:18789/napcat/media?...`
 - NapCat 再去这个地址拿图片/语音
@@ -616,7 +616,7 @@ node skill/napcat-qq/scripts/qq-contact-search.js 老王 private
     "napcat": {
       "enabled": true,
       "agentId": "main",
-      "url": "http://127.0.0.1:3000",
+      "url": "http://127.0.0.1:15150",
       "allowUsers": ["123456789", "987654321"],
       "enableGroupMessages": true,
       "groupWhitelist": ["123456789", "987654321"],
@@ -652,7 +652,7 @@ node skill/napcat-qq/scripts/qq-contact-search.js 老王 private
 
 | 配置项 | 类型 | 这是干什么的 | 默认值 |
 |---|---|---|---|
-| `url` | string | NapCat 的 HTTP 服务地址 | `http://127.0.0.1:3000` |
+| `url` | string | NapCat 的 HTTP 服务地址 | `http://127.0.0.1:15150` |
 | `agentId` | string | 固定把消息交给哪个 OpenClaw agent 处理；留空时按 OpenClaw 路由（可配 bindings） | `""` |
 | `allowUsers` | string[] | 只允许这些 QQ 号触发机器人；空数组表示不过滤 | `[]` |
 | `enableGroupMessages` | boolean | 是否处理群消息 | `false` |
