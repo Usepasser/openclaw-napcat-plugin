@@ -736,6 +736,9 @@ export async function handleNapCatWebhook(req: IncomingMessage, res: ServerRespo
                 ? `session:napcat:group:${event.group_id}`
                 : `session:napcat:private:${senderId}`;
             const cfg = runtime.config?.loadConfig?.() || {};
+            const peer = isGroup
+                ? { kind: "group", id: String(event.group_id) }
+                : { kind: "direct", id: senderId };
 
             // Resolve route for this message with specific session key
             // Note: OpenClaw SDK ignores the sessionKey param, so we must override it after
@@ -746,6 +749,7 @@ export async function handleNapCatWebhook(req: IncomingMessage, res: ServerRespo
                 text,
                 cfg,
                 ctx: {},
+                peer,
             });
 
             if (!route?.agentId) {
@@ -758,7 +762,7 @@ export async function handleNapCatWebhook(req: IncomingMessage, res: ServerRespo
 
             const configuredAgentId = String(config.agentId || "").trim().toLowerCase();
             const routeAgentId = String(route.agentId || "").trim().toLowerCase();
-            const effectiveAgentId = configuredAgentId || routeAgentId || "main";
+            const effectiveAgentId = routeAgentId || configuredAgentId || "main";
             const sessionKey = `agent:${effectiveAgentId}:${baseSessionKey}`;
 
             // User requested to use session key as display name for consistency
@@ -767,7 +771,7 @@ export async function handleNapCatWebhook(req: IncomingMessage, res: ServerRespo
             // Log for debugging
             console.log(`[NapCat] Inbound from ${senderId} (session: ${sessionKey}): ${text.substring(0, 50)}...`);
             if (configuredAgentId && configuredAgentId !== routeAgentId) {
-                console.log(`[NapCat] Override route agent by config: ${routeAgentId || "none"} -> ${configuredAgentId}`);
+                console.log(`[NapCat] Route agent (${routeAgentId || "none"}) differs from configured agent (${configuredAgentId}); route takes precedence`);
             }
 
             // Force our custom session key and configured agent

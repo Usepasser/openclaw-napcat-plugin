@@ -653,7 +653,7 @@ node skill/napcat-qq/scripts/qq-contact-search.js 老王 private
 | 配置项 | 类型 | 这是干什么的 | 默认值 |
 |---|---|---|---|
 | `url` | string | NapCat 的 HTTP 服务地址 | `http://127.0.0.1:3000` |
-| `agentId` | string | 固定把消息交给哪个 OpenClaw agent 处理 | `""` |
+| `agentId` | string | 固定把消息交给哪个 OpenClaw agent 处理；留空时按 OpenClaw 路由（可配 bindings） | `""` |
 | `allowUsers` | string[] | 只允许这些 QQ 号触发机器人；空数组表示不过滤 | `[]` |
 | `enableGroupMessages` | boolean | 是否处理群消息 | `false` |
 | `groupWhitelist` | string[] | 只允许这些群号触发机器人；空数组表示不过滤群 | `[]` |
@@ -670,6 +670,37 @@ node skill/napcat-qq/scripts/qq-contact-search.js 老王 private
 | `groupFileStageContainerDir` | string | 上面暂存目录在容器里的对应路径 | `""` |
 | `enableInboundLogging` | boolean | 是否记录收到的消息日志 | `true` |
 | `inboundLogDir` | string | 入站日志目录 | `./logs/napcat-inbound` |
+
+---
+
+### 如果想按群路由到不同 agent
+
+现在 NapCat 插件会把会话信息作为 `peer` 传给 OpenClaw 的路由器，你可以在 `openclaw.json` 里用 `bindings` 为特定群指定 agent：
+
+```json
+"bindings": [
+  {
+    "agentId": "xxx",
+    "match": {
+      "channel": "napcat",
+      "peer": {
+        "kind": "group",
+        "id": "群号1"
+      }
+    }
+  },
+  {
+    "agentId": "yyy",
+    "match": {
+      "channel": "napcat",
+      "peer": {
+        "kind": "group",
+        "id": "群号2"
+      }
+    }
+  }
+]
+```
 
 ---
 
