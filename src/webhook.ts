@@ -6,6 +6,14 @@ import { appendFile, mkdir, stat } from "node:fs/promises";
 import { dirname, extname, resolve } from "node:path";
 import { buildNapCatMediaCq } from "./media.js";
 import { getNapCatRuntime, getNapCatConfig } from "./runtime.js";
+import { NapCatApiClient } from "./api-client.js";
+
+// Module-level API client for sending replies
+let apiClient: NapCatApiClient | null = null;
+
+export function setNapCatApiClient(client: NapCatApiClient | null) {
+    apiClient = client;
+}
 
 // Group name cache removed
 
@@ -210,9 +218,6 @@ async function handleNapCatMessageEvent(event: any, config: any): Promise<void> 
             responsePrefixContextProvider: () => ({}),
             humanDelay: 0,
             deliver: async (payload: any) => {
-                const baseUrl = config.url || "http://127.0.0.1:3000";
-                const token = String(config.token || "").trim();
-                const ws = getNapCatWs();
                 const isGroupTarget = replyTarget.startsWith("group:");
                 const targetId = isGroupTarget ? replyTarget.replace("group:", "") : replyTarget.replace("private:", "");
                 const endpoint = isGroupTarget ? "/send_group_msg" : "/send_private_msg";
@@ -225,20 +230,24 @@ async function handleNapCatMessageEvent(event: any, config: any): Promise<void> 
                 if (isGroupTarget) msgPayload.group_id = targetId;
                 else msgPayload.user_id = targetId;
 
-                if (ws && ws.readyState === ws.OPEN) {
-                    try {
-                        await sendToNapCatWS(ws, msgPayload, endpoint, token);
-                        console.log("[NapCat] WS reply sent successfully");
-                    } catch (err) {
-                        console.error("[NapCat] WS reply delivery failed:", err);
+                try {
+                    if (apiClient) {
+                        await apiClient.sendMessage(endpoint, msgPayload);
+                        console.log("[NapCat] Reply sent via apiClient");
+                    } else {
+                        const baseUrl = config.url || "http://127.0.0.1:3000";
+                        const token = String(config.token || "").trim();
+                        const ws = getNapCatWs();
+                        if (ws && ws.readyState === ws.OPEN) {
+                            await sendToNapCatWS(ws, msgPayload, endpoint, token);
+                            console.log("[NapCat] WS reply sent successfully");
+                        } else {
+                            await sendToNapCat(`${baseUrl}${endpoint}`, msgPayload, token);
+                            console.log("[NapCat] HTTP reply sent successfully");
+                        }
                     }
-                } else {
-                    try {
-                        await sendToNapCat(`${baseUrl}${endpoint}`, msgPayload, token);
-                        console.log("[NapCat] HTTP reply sent successfully");
-                    } catch (err) {
-                        console.error("[NapCat] Reply delivery failed (suppressed):", err);
-                    }
+                } catch (err) {
+                    console.error("[NapCat] Reply delivery failed:", err);
                 }
             },
             onError: (err: any, info: any) => {
@@ -255,9 +264,6 @@ async function handleNapCatMessageEvent(event: any, config: any): Promise<void> 
             responsePrefixContextProvider: () => ({}),
             humanDelay: 0,
             deliver: async (payload: any) => {
-                const baseUrl = config.url || "http://127.0.0.1:3000";
-                const token = String(config.token || "").trim();
-                const ws = getNapCatWs();
                 const isGroupTarget = replyTarget.startsWith("group:");
                 const targetId = isGroupTarget ? replyTarget.replace("group:", "") : replyTarget.replace("private:", "");
                 const endpoint = isGroupTarget ? "/send_group_msg" : "/send_private_msg";
@@ -270,18 +276,21 @@ async function handleNapCatMessageEvent(event: any, config: any): Promise<void> 
                 if (isGroupTarget) msgPayload.group_id = targetId;
                 else msgPayload.user_id = targetId;
 
-                if (ws && ws.readyState === ws.OPEN) {
-                    try {
-                        await sendToNapCatWS(ws, msgPayload, endpoint, token);
-                    } catch (err) {
-                        console.error("[NapCat] WS reply delivery failed:", err);
+                try {
+                    if (apiClient) {
+                        await apiClient.sendMessage(endpoint, msgPayload);
+                    } else {
+                        const baseUrl = config.url || "http://127.0.0.1:3000";
+                        const token = String(config.token || "").trim();
+                        const ws = getNapCatWs();
+                        if (ws && ws.readyState === ws.OPEN) {
+                            await sendToNapCatWS(ws, msgPayload, endpoint, token);
+                        } else {
+                            await sendToNapCat(`${baseUrl}${endpoint}`, msgPayload, token);
+                        }
                     }
-                } else {
-                    try {
-                        await sendToNapCat(`${baseUrl}${endpoint}`, msgPayload, token);
-                    } catch (err) {
-                        console.error("[NapCat] Reply delivery failed (suppressed):", err);
-                    }
+                } catch (err) {
+                    console.error("[NapCat] Reply delivery failed:", err);
                 }
             },
             onError: (err: any, info: any) => {
@@ -844,16 +853,6 @@ function extractNapCatEvents(body: any): any[] {
 }
 
 export async function handleNapCatWebhook(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
-    const config = getNapCatConfig();
-
-    // WS mode: NapCat sends events via WebSocket, ignore HTTP callbacks
-    if (config.connectionMethod === "websocket") {
-        res.statusCode = 200;
-        res.setHeader("Content-Type", "application/json");
-        res.end('{"status":"ok"}');
-        return true;
-    }
-
     const url = req.url || "";
     const method = req.method || "UNKNOWN";
 

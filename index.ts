@@ -14,22 +14,27 @@ const plugin = {
 	setRuntime: setNapCatRuntime,
 	registerFull(api: any) {
 		registered = true;
-		setNapCatConfig(api.config.channels?.napcat || {});
+		const config = api.config.channels?.napcat || {};
+		setNapCatConfig(config);
 		// setNapCatRuntime(api.runtime);
 		api.registerChannel({ plugin: napcatPlugin as any });
 
-		// Compatibility: old SDKs expose registerHttpHandler, newer SDKs prefer registerHttpRoute.
-		const anyApi = api as any;
-		if (typeof anyApi.registerHttpRoute === "function") {
-			anyApi.registerHttpRoute({
-				path: "/napcat",
-				handler: handleNapCatWebhook,
-				auth: "plugin",
-			});
-		} else if (typeof anyApi.registerHttpHandler === "function") {
-			anyApi.registerHttpHandler(handleNapCatWebhook);
-		} else {
-			throw new Error("NapCat plugin: no HTTP registration API found (registerHttpRoute/registerHttpHandler)");
+		// Only register HTTP handler when using HTTP mode (WebSocket mode uses bidirectional connection)
+		const connectionMethod = config.connectionMethod || "http";
+		if (connectionMethod === "http") {
+			// Compatibility: old SDKs expose registerHttpHandler, newer SDKs prefer registerHttpRoute.
+			const anyApi = api as any;
+			if (typeof anyApi.registerHttpRoute === "function") {
+				anyApi.registerHttpRoute({
+					path: "/napcat",
+					handler: handleNapCatWebhook,
+					auth: "plugin",
+				});
+			} else if (typeof anyApi.registerHttpHandler === "function") {
+				anyApi.registerHttpHandler(handleNapCatWebhook);
+			} else {
+				throw new Error("NapCat plugin: no HTTP registration API found (registerHttpRoute/registerHttpHandler)");
+			}
 		}
 	},
 };
