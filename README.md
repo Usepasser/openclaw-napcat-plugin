@@ -53,6 +53,55 @@
 
 ---
 
+## 连接方式：HTTP vs WebSocket
+
+插件支持两种方式和 NapCat 通信：
+
+### HTTP 模式（默认）
+
+NapCat 通过 **HTTP POST** 发送事件给 OpenClaw，OpenClaw 通过 **HTTP API** 发送消息给 NapCat。
+
+```
+NapCat → (HTTP POST) → OpenClaw /napcat
+OpenClaw → (HTTP API) → NapCat /send_msg
+```
+
+### WebSocket 模式
+
+OpenClaw 和 NapCat 建立 **双向 WebSocket 连接**，所有消息通过同一个连接收发。
+
+```
+OpenClaw ↔ (WebSocket) ↔ NapCat
+```
+
+**优势：**
+- 连接更稳定，不需要重复建立 TCP
+- 减少 HTTP 建连开销
+- NapCat 本身支持 WebSocket 时推荐使用
+
+**配置方式：**
+
+```json
+{
+  "channels": {
+    "napcat": {
+      "enabled": true,
+      "url": "http://127.0.0.1:15150",
+      "connectionMethod": "websocket",
+      "token": "your_token_here"
+    }
+  }
+}
+```
+
+`connectionMethod` 可选值：
+- `http`（默认）— HTTP webhook + API 调用
+- `websocket` — 双向 WebSocket 连接
+
+NapCat 端需要启用 WebSocket 服务器（在 NapCat 网络配置中开启 `enableWebsocket`）。WebSocket 地址从 `url` 自动推导（`http://` → `ws://`），端口和协议前缀复用 `url` 配置。
+
+---
+
 ## 开始前，你需要准备什么
 
 在安装前，最好先确认你已经有：
@@ -617,6 +666,8 @@ node skill/napcat-qq/scripts/qq-contact-search.js 老王 private
       "enabled": true,
       "agentId": "main",
       "url": "http://127.0.0.1:15150",
+      "connectionMethod": "http",
+      "token": "",
       "allowUsers": ["123456789", "987654321"],
       "enableGroupMessages": true,
       "groupWhitelist": ["123456789", "987654321"],
@@ -653,6 +704,8 @@ node skill/napcat-qq/scripts/qq-contact-search.js 老王 private
 | 配置项 | 类型 | 这是干什么的 | 默认值 |
 |---|---|---|---|
 | `url` | string | NapCat 的 HTTP 服务地址 | `http://127.0.0.1:15150` |
+| `connectionMethod` | string | 连接方式：`http` 或 `websocket` | `http` |
+| `token` | string | 认证令牌（HTTP 和 WebSocket 通用） | `""` |
 | `agentId` | string | 固定把消息交给哪个 OpenClaw agent 处理；留空时按 OpenClaw 路由（可配 bindings） | `""` |
 | `allowUsers` | string[] | 只允许这些 QQ 号触发机器人；空数组表示不过滤 | `[]` |
 | `enableGroupMessages` | boolean | 是否处理群消息 | `false` |
