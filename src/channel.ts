@@ -14,9 +14,6 @@ let wsClient: NapCatWebSocket | null = null;
 // Module-level API client for sending messages
 let apiClient: NapCatApiClient | null = null;
 
-// Module-level WebSocket client instance for sending
-let wsClient: NapCatWebSocket | null = null;
-
 async function uploadGroupFileToNapCat(url: string, payload: {
     groupId: string;
     filePath: string;

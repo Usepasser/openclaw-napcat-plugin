@@ -1,12 +1,11 @@
-import { Agent as HttpAgent, request as httpRequest } from "node:http";
-import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
-import type { IncomingMessage, ServerResponse } from "node:http";
-import { createReadStream } from "node:fs";
-import { appendFile, mkdir, stat } from "node:fs/promises";
-import { dirname, extname, resolve } from "node:path";
 import { buildNapCatMediaCq } from "./media.js";
-import { getNapCatRuntime, getNapCatConfig } from "./runtime.js";
+import { getNapCatRuntime } from "./runtime.js";
 import { NapCatApiClient } from "./api-client.js";
+import { sendToNapCat } from "./api-client.js";
+import { handleNapCatWebhook } from "./http-handler.js";
+
+// Re-export HTTP handler for backward compatibility
+export { handleNapCatWebhook };
 
 // Module-level API client for sending replies
 let apiClient: NapCatApiClient | null = null;
@@ -14,9 +13,6 @@ let apiClient: NapCatApiClient | null = null;
 export function setNapCatApiClient(client: NapCatApiClient | null) {
     apiClient = client;
 }
-
-// Group name cache removed
-
 
 function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -65,6 +61,65 @@ export async function handleNapCatWebsocket(event: any, config: any): Promise<vo
 
     // Log other event types for debugging
     console.log(`[NapCat] WS unhandled event type: ${event.post_type || "unknown"}`);
+}
+
+// Build inbound message text from event
+async function buildInboundMessageText(event: any, config: any): Promise<string> {
+    const text = event.message || "";
+    if (event.raw_message) return event.raw_message;
+
+    // For CQ code images, replace with file path if available
+    const normalizedText = text
+        .replace(/\[CQ:image,file=(.+?)(?:,url=([^,\]]+))?\]/gi, (_match, file, _url) => {
+            if (file?.startsWith("file://")) {
+                return file;
+            }
+            return "";
+        })
+        .replace(/\[CQ:record,file=(.+?)(?:,url=([^,\]]+))?\]/gi, (_match, file, _url) => {
+            if (file?.startsWith("file://")) {
+                return `[${file}]`;
+            }
+            return "";
+        })
+        .trim();
+
+    return normalizedText;
+}
+
+// Build outbound message from reply payload for NapCat
+async function buildNapCatMessageFromReply(payload: any, config: any): Promise<string | null> {
+    if (!payload) return null;
+
+    const parts: string[] = [];
+
+    if (payload.text) {
+        parts.push(payload.text);
+    }
+
+    if (payload.attachments && Array.isArray(payload.attachments)) {
+        for (const attachment of payload.attachments) {
+            if (attachment["content-type"]?.startsWith("image/") || attachment.type === "image") {
+                const file = attachment.file_url || attachment.url || attachment.path || attachment.name;
+                if (file) {
+                    if (file.startsWith("file://") || file.startsWith("http")) {
+                        const cqCode = `[CQ:image,file=${file}]`;
+                        parts.push(cqCode);
+                    }
+                }
+            } else if (attachment["content-type"]?.startsWith("audio/") || attachment.type === "audio") {
+                const file = attachment.file_url || attachment.url || attachment.path || attachment.name;
+                if (file) {
+                    if (file.startsWith("file://") || file.startsWith("http")) {
+                        const cqCode = `[CQ:record,file=${file}]`;
+                        parts.push(cqCode);
+                    }
+                }
+            }
+        }
+    }
+
+    return parts.join("\n") || null;
 }
 
 // Process a NapCat message event (shared by HTTP webhook and WS)
@@ -316,612 +371,5 @@ async function handleNapCatMessageEvent(event: any, config: any): Promise<void> 
         });
     } catch (err) {
         console.error("[NapCat] Dispatch error:", err);
-    }
-}
-
-const napcatHttpAgent = new HttpAgent({
-    keepAlive: true,
-    keepAliveMsecs: 10000,
-    maxSockets: 20,
-    maxFreeSockets: 10,
-});
-
-const napcatHttpsAgent = new HttpsAgent({
-    keepAlive: true,
-    keepAliveMsecs: 10000,
-    maxSockets: 20,
-    maxFreeSockets: 10,
-});
-
-function isRetryableNapCatError(err: any): boolean {
-    const code = String(err?.cause?.code || err?.code || "");
-    return ["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EPIPE", "UND_ERR_SOCKET", "ECONNABORTED"].includes(code);
-}
-
-async function postJsonWithNodeHttp(
-    url: string,
-    payload: any,
-    timeoutMs: number,
-    opts?: { connectionClose?: boolean; token?: string }
-): Promise<{ statusCode: number; statusText: string; bodyText: string }> {
-    const target = new URL(url);
-    const isHttps = target.protocol === "https:";
-    const body = JSON.stringify(payload);
-    const transport = isHttps ? httpsRequest : httpRequest;
-    const connectionClose = opts?.connectionClose === true;
-    const normalizedToken = String(opts?.token ?? "").trim();
-    const agent = connectionClose ? undefined : (isHttps ? napcatHttpsAgent : napcatHttpAgent);
-
-    return new Promise((resolve, reject) => {
-        const headers: Record<string, string | number> = {
-            "Content-Type": "application/json",
-            "Content-Length": Buffer.byteLength(body),
-            "Connection": connectionClose ? "close" : "keep-alive",
-        };
-        if (normalizedToken) {
-            headers["Authorization"] = `Bearer ${normalizedToken}`;
-        }
-        const req = transport(
-            {
-                protocol: target.protocol,
-                hostname: target.hostname,
-                port: target.port || (isHttps ? 443 : 80),
-                path: `${target.pathname}${target.search}`,
-                method: "POST",
-                agent,
-                headers,
-            },
-            (res) => {
-                const chunks: Buffer[] = [];
-                res.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
-                res.on("end", () => {
-                    const bodyText = Buffer.concat(chunks).toString("utf8");
-                    resolve({
-                        statusCode: res.statusCode || 0,
-                        statusText: res.statusMessage || "",
-                        bodyText,
-                    });
-                });
-            }
-        );
-
-        req.setTimeout(timeoutMs, () => {
-            req.destroy(Object.assign(new Error(`NapCat request timeout after ${timeoutMs}ms`), { code: "ETIMEDOUT" }));
-        });
-
-        req.on("error", reject);
-        req.write(body);
-        req.end();
-    });
-}
-
-// Send message via NapCat API (node http/https keep-alive + retry for transient socket errors)
-export async function sendToNapCat(url: string, payload: any, token?: string) {
-    const maxAttempts = 3;
-    const timeoutsMs = [5000, 7000, 9000];
-    const cfg = getNapCatConfig();
-    const connectionClose = cfg.connectionClose !== false; // default true for local docker stability
-    const target = new URL(url);
-    const targetInfo = `${target.protocol}//${target.hostname}:${target.port || (target.protocol === "https:" ? "443" : "80")}${target.pathname}`;
-
-    let lastErr: any = null;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        const startedAt = Date.now();
-        try {
-            const timeoutMs = timeoutsMs[Math.min(attempt - 1, timeoutsMs.length - 1)];
-            const res = await postJsonWithNodeHttp(url, payload, timeoutMs, { connectionClose, token });
-
-            if (res.statusCode < 200 || res.statusCode >= 300) {
-                throw new Error(`NapCat API Error: ${res.statusCode} ${res.statusText}${res.bodyText ? ` | ${res.bodyText.slice(0, 300)}` : ""}`);
-            }
-
-            const elapsedMs = Date.now() - startedAt;
-            console.log(`[NapCat] sendToNapCat success attempt ${attempt}/${maxAttempts} ${targetInfo} in ${elapsedMs}ms (connection=${connectionClose ? "close" : "keep-alive"})`);
-
-            if (!res.bodyText) return { status: "ok" };
-            try {
-                return JSON.parse(res.bodyText);
-            } catch {
-                return { status: "ok", raw: res.bodyText };
-            }
-        } catch (err: any) {
-            lastErr = err;
-            const retryable = isRetryableNapCatError(err);
-            const elapsedMs = Date.now() - startedAt;
-            if (!retryable || attempt >= maxAttempts) {
-                console.error(`[NapCat] sendToNapCat failed attempt ${attempt}/${maxAttempts} ${targetInfo} in ${elapsedMs}ms: ${err?.cause?.code || err?.code || err}`);
-                break;
-            }
-            const backoffMs = attempt * 400;
-            console.warn(`[NapCat] sendToNapCat retry ${attempt}/${maxAttempts} ${targetInfo} in ${elapsedMs}ms; backoff ${backoffMs}ms; reason=${err?.cause?.code || err?.code || err}`);
-            await sleep(backoffMs);
-        }
-    }
-
-    throw lastErr;
-}
-
-async function buildNapCatMessageFromReply(
-    payload: { text?: string; mediaUrl?: string; mediaUrls?: string[]; audioAsVoice?: boolean },
-    config: any
-) {
-    const text = payload.text?.trim() || "";
-    const mediaCandidates = [
-        ...(payload.mediaUrls || []),
-        ...(payload.mediaUrl ? [payload.mediaUrl] : [])
-    ];
-    const mediaSegments = await Promise.all(
-        mediaCandidates
-            .map((url) => String(url || "").trim())
-            .filter(Boolean)
-            .map((url) => buildNapCatMediaCq(url, config, payload.audioAsVoice === true))
-    );
-
-    if (text && mediaSegments.length > 0) return `${text}\n${mediaSegments.join("\n")}`;
-    if (text) return text;
-    return mediaSegments.join("\n");
-}
-
-function getContentTypeByPath(filePath: string): string {
-    const ext = extname(filePath).toLowerCase();
-    if (ext === ".jpg" || ext === ".jpeg") return "image/jpeg";
-    if (ext === ".png") return "image/png";
-    if (ext === ".gif") return "image/gif";
-    if (ext === ".webp") return "image/webp";
-    if (ext === ".bmp") return "image/bmp";
-    if (ext === ".svg") return "image/svg+xml";
-    return "application/octet-stream";
-}
-
-async function handleMediaProxyRequest(res: ServerResponse, url: string): Promise<boolean> {
-    const config = getNapCatConfig();
-    if (config.mediaProxyEnabled !== true) {
-        res.statusCode = 404;
-        res.end("not found");
-        return true;
-    }
-
-    const parsed = new URL(url, "http://127.0.0.1");
-    if (parsed.pathname !== "/napcat/media") {
-        res.statusCode = 404;
-        res.end("not found");
-        return true;
-    }
-
-    const expectedToken = String(config.mediaProxyToken || "").trim();
-    const token = String(parsed.searchParams.get("token") || "").trim();
-    if (expectedToken && token !== expectedToken) {
-        res.statusCode = 403;
-        res.end("forbidden");
-        return true;
-    }
-
-    const mediaUrl = String(parsed.searchParams.get("url") || "").trim();
-    if (!mediaUrl) {
-        res.statusCode = 400;
-        res.end("missing url");
-        return true;
-    }
-
-    try {
-        if (mediaUrl.startsWith("http://") || mediaUrl.startsWith("https://")) {
-            const upstream = await fetch(mediaUrl);
-            if (!upstream.ok) {
-                res.statusCode = 502;
-                res.end(`upstream fetch failed: ${upstream.status}`);
-                return true;
-            }
-            const contentType = upstream.headers.get("content-type") || "application/octet-stream";
-            res.statusCode = 200;
-            res.setHeader("Content-Type", contentType);
-            const buffer = Buffer.from(await upstream.arrayBuffer());
-            res.setHeader("Content-Length", buffer.length);
-            res.end(buffer);
-            return true;
-        }
-
-        let filePath = mediaUrl;
-        if (mediaUrl.startsWith("file://")) {
-            filePath = decodeURIComponent(new URL(mediaUrl).pathname);
-        }
-        if (!filePath.startsWith("/")) {
-            res.statusCode = 400;
-            res.end("unsupported media url");
-            return true;
-        }
-
-        const fileStat = await stat(filePath);
-        if (!fileStat.isFile()) {
-            res.statusCode = 404;
-            res.end("file not found");
-            return true;
-        }
-
-        res.statusCode = 200;
-        res.setHeader("Content-Type", getContentTypeByPath(filePath));
-        res.setHeader("Content-Length", fileStat.size);
-        createReadStream(filePath).pipe(res);
-        return true;
-    } catch (err) {
-        console.error("[NapCat] Media proxy error:", err);
-        res.statusCode = 500;
-        res.end("media proxy error");
-        return true;
-    }
-}
-
-async function readBody(req: IncomingMessage): Promise<any> {
-    return new Promise((resolve, reject) => {
-        let data = "";
-        req.on("data", chunk => data += chunk);
-        req.on("end", () => {
-            try {
-                if (!data) {
-                    resolve({});
-                    return;
-                }
-                resolve(JSON.parse(data));
-            } catch (e) {
-                console.error("NapCat JSON Parse Error:", e);
-                // Some deployments send form-urlencoded bodies with nested JSON payload.
-                try {
-                    const params = new URLSearchParams(data);
-                    const wrapped = params.get("payload") || params.get("data") || params.get("message");
-                    if (wrapped) {
-                        resolve(JSON.parse(wrapped));
-                        return;
-                    }
-                } catch {
-                    // Fall through and preserve raw body for diagnostics.
-                }
-                resolve({ __raw: data, __parseError: true });
-            }
-        });
-        req.on("error", reject);
-    });
-}
-
-function sanitizeLogToken(raw: string): string {
-    return String(raw || "unknown").replace(/[^a-zA-Z0-9_-]/g, "_");
-}
-
-function extractNapCatMessageSegments(input: any): any[] {
-    if (Array.isArray(input)) {
-        return input.filter((item) => item && typeof item === "object");
-    }
-    if (input && typeof input === "object" && typeof input.type === "string") {
-        return [input];
-    }
-    if (typeof input === "string") {
-        return [{ type: "text", data: { text: input } }];
-    }
-    return [];
-}
-
-function extractForwardEntries(input: any): any[] {
-    if (!input) return [];
-    if (Array.isArray(input)) {
-        return input.filter((item) => item && typeof item === "object");
-    }
-    if (typeof input !== "object") return [];
-
-    const candidates = [
-        input.messages,
-        input.message,
-        input.content,
-        input.data?.messages,
-        input.data?.message,
-        input.data?.content,
-    ];
-
-    for (const candidate of candidates) {
-        if (Array.isArray(candidate)) {
-            return candidate.filter((item) => item && typeof item === "object");
-        }
-    }
-    return [];
-}
-
-function formatInlineSegmentLabel(prefix: string, value?: string): string {
-    const normalizedValue = String(value || "").trim();
-    return normalizedValue ? `[${prefix}:${normalizedValue}]` : `[${prefix}]`;
-}
-
-function normalizeRenderedMessageText(text: string): string {
-    return text
-        .replace(/\r\n/g, "\n")
-        .replace(/[ \t]+\n/g, "\n")
-        .replace(/\n{3,}/g, "\n\n")
-        .trim();
-}
-
-async function fetchNapCatForwardEntries(
-    forwardId: string,
-    config: any,
-    cache: Map<string, any[] | null>
-): Promise<any[] | null> {
-    const normalizedId = String(forwardId || "").trim();
-    if (!normalizedId) return null;
-    if (cache.has(normalizedId)) {
-        return cache.get(normalizedId) ?? null;
-    }
-
-    const baseUrl = String(config.url || "http://127.0.0.1:15150").trim().replace(/\/+$/, "");
-    const token = String(config.token || "").trim();
-
-    try {
-        const result = await sendToNapCat(`${baseUrl}/get_forward_msg`, { message_id: normalizedId }, token);
-        const entries = extractForwardEntries(result?.data ?? result);
-        cache.set(normalizedId, entries.length > 0 ? entries : null);
-        return cache.get(normalizedId) ?? null;
-    } catch (err) {
-        console.error(`[NapCat] Failed to fetch forward message ${normalizedId}:`, err);
-        cache.set(normalizedId, null);
-        return null;
-    }
-}
-
-async function renderNapCatSegmentsToText(
-    segments: any[],
-    config: any,
-    cache: Map<string, any[] | null>,
-    depth = 0
-): Promise<string> {
-    if (!Array.isArray(segments) || segments.length === 0) return "";
-    if (depth > 3) return "[合并转发嵌套过深]";
-
-    let output = "";
-    for (const segment of segments) {
-        output += await renderNapCatSegmentToText(segment, config, cache, depth);
-    }
-    return normalizeRenderedMessageText(output);
-}
-
-async function renderNapCatForwardNode(
-    node: any,
-    config: any,
-    cache: Map<string, any[] | null>,
-    depth: number
-): Promise<string> {
-    const rawNode = node?.data && typeof node.data === "object" ? node.data : node;
-    const senderName = String(
-        rawNode?.nickname ||
-        rawNode?.name ||
-        rawNode?.sender?.nickname ||
-        rawNode?.user_name ||
-        rawNode?.user_id ||
-        "未知发送者"
-    ).trim();
-
-    let contentText = "";
-    const contentSegments = extractNapCatMessageSegments(
-        rawNode?.content ?? rawNode?.message ?? rawNode?.messages
-    );
-    if (contentSegments.length > 0) {
-        contentText = await renderNapCatSegmentsToText(contentSegments, config, cache, depth + 1);
-    } else if (typeof rawNode?.content === "string") {
-        contentText = normalizeRenderedMessageText(rawNode.content);
-    } else if (typeof rawNode?.message === "string") {
-        contentText = normalizeRenderedMessageText(rawNode.message);
-    } else if (typeof rawNode?.raw_message === "string") {
-        contentText = normalizeRenderedMessageText(rawNode.raw_message);
-    }
-
-    return `${senderName}: ${contentText || "[空消息]"}`;
-}
-
-async function renderNapCatForwardEntries(
-    entries: any[],
-    config: any,
-    cache: Map<string, any[] | null>,
-    depth: number
-): Promise<string> {
-    if (!Array.isArray(entries) || entries.length === 0) {
-        return "[合并转发]\n[未能读取转发内容]";
-    }
-
-    const lines: string[] = ["[合并转发]"];
-    for (const entry of entries) {
-        lines.push(await renderNapCatForwardNode(entry, config, cache, depth + 1));
-    }
-    return lines.join("\n");
-}
-
-async function renderNapCatSegmentToText(
-    segment: any,
-    config: any,
-    cache: Map<string, any[] | null>,
-    depth: number
-): Promise<string> {
-    const type = String(segment?.type || "").trim().toLowerCase();
-    const data = segment?.data && typeof segment.data === "object" ? segment.data : {};
-
-    switch (type) {
-        case "text":
-            return String(data.text || "");
-        case "at":
-            return data.qq === "all" ? "@全体成员" : `@${String(data.qq || "").trim()}`;
-        case "face":
-            return formatInlineSegmentLabel("表情", String(data.summary || data.id || "").trim());
-        case "image":
-        case "mface":
-            return formatInlineSegmentLabel("图片", String(data.summary || data.name || "").trim());
-        case "record":
-            return formatInlineSegmentLabel("语音", String(data.name || "").trim());
-        case "video":
-            return formatInlineSegmentLabel("视频", String(data.name || "").trim());
-        case "file":
-            return formatInlineSegmentLabel("文件", String(data.name || data.file || "").trim());
-        case "reply":
-            return formatInlineSegmentLabel("回复", String(data.id || "").trim());
-        case "json":
-            return "[JSON消息]";
-        case "markdown":
-            return String(data.content || data.markdown || "[Markdown消息]");
-        case "contact":
-            return formatInlineSegmentLabel("名片", String(data.id || data.type || "").trim());
-        case "location":
-            return formatInlineSegmentLabel("位置", String(data.title || data.address || "").trim());
-        case "music":
-            return formatInlineSegmentLabel("音乐", String(data.title || data.id || data.type || "").trim());
-        case "share":
-            return formatInlineSegmentLabel("分享", String(data.title || data.url || "").trim());
-        case "lightapp":
-            return "[小程序卡片]";
-        case "forward": {
-            const inlineEntries = extractForwardEntries(data);
-            const forwardId = String(data.id || "").trim();
-            const entries = inlineEntries.length > 0
-                ? inlineEntries
-                : await fetchNapCatForwardEntries(forwardId, config, cache);
-            if (!entries || entries.length === 0) {
-                return forwardId ? `[合并转发:${forwardId}]` : "[合并转发]";
-            }
-            return `\n${await renderNapCatForwardEntries(entries, config, cache, depth)}\n`;
-        }
-        default:
-            return type ? `[${type}]` : "";
-    }
-}
-
-async function buildInboundMessageText(event: any, config: any): Promise<string> {
-    const segments = extractNapCatMessageSegments(event?.message);
-    if (segments.length === 0) {
-        return normalizeRenderedMessageText(String(event?.raw_message || ""));
-    }
-
-    const cache = new Map<string, any[] | null>();
-    const rendered = await renderNapCatSegmentsToText(segments, config, cache);
-    return rendered || normalizeRenderedMessageText(String(event?.raw_message || ""));
-}
-
-function getInboundLogFilePath(body: any, config: any): string {
-    const isGroup = body?.message_type === "group";
-    const baseDirRaw = String(config.inboundLogDir || "./logs/napcat-inbound").trim() || "./logs/napcat-inbound";
-    const baseDir = resolve(baseDirRaw);
-    if (isGroup) {
-        const groupId = sanitizeLogToken(String(body?.group_id || "unknown_group"));
-        return resolve(baseDir, `group-${groupId}.log`);
-    }
-    const userId = sanitizeLogToken(String(body?.user_id || "unknown_user"));
-    return resolve(baseDir, `qq-${userId}.log`);
-}
-
-async function logInboundMessage(body: any, config: any): Promise<void> {
-    if (config.enableInboundLogging === false) return;
-    if (body?.post_type !== "message" && body?.post_type !== "message_sent") return;
-
-    const filePath = getInboundLogFilePath(body, config);
-    const line = JSON.stringify({
-        ts: new Date().toISOString(),
-        post_type: body.post_type,
-        message_type: body.message_type,
-        self_id: body.self_id,
-        user_id: body.user_id,
-        group_id: body.group_id,
-        message_id: body.message_id,
-        raw_message: body.raw_message || "",
-        sender: body.sender || {},
-    }) + "\n";
-
-    await mkdir(dirname(filePath), { recursive: true });
-    await appendFile(filePath, line, "utf8");
-}
-
-async function logInboundParseFailure(rawBody: string, config: any): Promise<void> {
-    if (config.enableInboundLogging === false) return;
-    const baseDirRaw = String(config.inboundLogDir || "./logs/napcat-inbound").trim() || "./logs/napcat-inbound";
-    const filePath = resolve(baseDirRaw, "parse-error.log");
-    const line = JSON.stringify({
-        ts: new Date().toISOString(),
-        kind: "parse_error",
-        raw_body: rawBody,
-    }) + "\n";
-    await mkdir(dirname(filePath), { recursive: true });
-    await appendFile(filePath, line, "utf8");
-}
-
-function extractNapCatEvents(body: any): any[] {
-    if (!body || typeof body !== "object") return [];
-    if (Array.isArray(body)) return body.filter((item) => item && typeof item === "object");
-    if (body.post_type) return [body];
-    if (Array.isArray(body.events)) return body.events.filter((item: any) => item && typeof item === "object");
-    if (Array.isArray(body.data)) return body.data.filter((item: any) => item && typeof item === "object");
-    if (body.data && typeof body.data === "object") return [body.data];
-    if (body.payload && typeof body.payload === "object") return [body.payload];
-    return [];
-}
-
-export async function handleNapCatWebhook(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
-    const url = req.url || "";
-    const method = req.method || "UNKNOWN";
-
-    console.log(`[NapCat] Incoming request: ${method} ${url}`);
-
-    // Accept /napcat, /napcat/, or any path starting with /napcat
-    if (!url.startsWith("/napcat")) return false;
-
-    if (method === "GET") {
-        return handleMediaProxyRequest(res, url);
-    }
-
-    if (method !== "POST") {
-        // For non-POST requests to /napcat endpoints, return 405
-        res.statusCode = 405;
-        res.setHeader("Content-Type", "application/json");
-        res.end('{"status":"error","message":"Method Not Allowed"}');
-        return true;
-    }
-
-    try {
-        const body = await readBody(req);
-        const config = getNapCatConfig();
-
-        // Note: Token verification for incoming requests from NapCat is not implemented
-        // because NapCat's HTTP client does not support custom Authorization headers.
-        // The token is only used when OpenClaw sends messages TO NapCat.
-
-        const events = extractNapCatEvents(body);
-
-        try {
-            if (body?.__parseError && typeof body.__raw === "string" && body.__raw.trim()) {
-                await logInboundParseFailure(body.__raw, config);
-            }
-            for (const event of events) {
-                await logInboundMessage(event, config);
-            }
-        } catch (err) {
-            console.error("[NapCat] Failed to write inbound log:", err);
-        }
-
-        const event = events[0] || body;
-
-        // Heartbeat / Lifecycle
-        if (event.post_type === "meta_event") {
-            res.statusCode = 200;
-            res.setHeader("Content-Type", "application/json");
-            res.end('{"status":"ok"}');
-            return true;
-        }
-
-        if (event.post_type === "message") {
-            // Delegate to shared message handler
-            await handleNapCatMessageEvent(event, config);
-            res.statusCode = 200;
-            res.setHeader("Content-Type", "application/json");
-            res.end('{"status":"ok"}');
-            return true;
-        }
-
-        // Default OK for handled path
-        res.statusCode = 200;
-        res.setHeader("Content-Type", "application/json");
-        res.end('{"status":"ok"}');
-        return true;
-    } catch (err) {
-        console.error("NapCat Webhook Error:", err);
-        res.statusCode = 500;
-        res.end("error");
-        return true;
     }
 }
