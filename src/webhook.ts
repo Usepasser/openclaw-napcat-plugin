@@ -244,8 +244,8 @@ async function handleNapCatMessageEvent(event: any, config: any): Promise<void> 
             onError: (err: any, info: any) => {
                 console.error(`[NapCat] Reply error (${info.kind}):`, err);
             },
-            onReplyStart: () => {},
-            onIdle: () => {},
+            onReplyStart: () => { },
+            onIdle: () => { },
         });
         dispatcher = result.dispatcher;
         dispatcherReplyOptions = result.replyOptions || {};
@@ -856,16 +856,16 @@ export async function handleNapCatWebhook(req: IncomingMessage, res: ServerRespo
 
     const url = req.url || "";
     const method = req.method || "UNKNOWN";
-    
+
     console.log(`[NapCat] Incoming request: ${method} ${url}`);
-    
+
     // Accept /napcat, /napcat/, or any path starting with /napcat
     if (!url.startsWith("/napcat")) return false;
 
     if (method === "GET") {
         return handleMediaProxyRequest(res, url);
     }
-    
+
     if (method !== "POST") {
         // For non-POST requests to /napcat endpoints, return 405
         res.statusCode = 405;

@@ -452,7 +452,7 @@ async function startHttpMode(setStatus: any, abortSignal: any) {
         abortSignal.addEventListener('abort', cleanup);
     }
 
-    await new Promise(() => {});
+    await new Promise(() => { });
 }
 
 async function startWebSocketMode(config: any, setStatus: any, abortSignal: any) {
@@ -534,5 +534,5 @@ async function startWebSocketMode(config: any, setStatus: any, abortSignal: any)
 
     await connect();
 
-    await new Promise(() => {});
+    await new Promise(() => { });
 };
