@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-const DEFAULT_NAPCAT_URL = "http://127.0.0.1:3000";
+const DEFAULT_NAPCAT_URL = "http://127.0.0.1:15150";
 
 function normalizeBaseUrl(input) {
   return String(input || DEFAULT_NAPCAT_URL).trim().replace(/\/+$/, "");
