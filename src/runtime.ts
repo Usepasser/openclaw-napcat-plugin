@@ -1,6 +1,7 @@
 // Global runtime reference for the plugin
 let _runtime: any;
 let _config: any = {};
+let _ws: any = null;
 
 export function setNapCatRuntime(runtime: any) {
   _runtime = runtime;
@@ -8,6 +9,14 @@ export function setNapCatRuntime(runtime: any) {
 
 export function setNapCatConfig(config: any) {
   _config = config;
+}
+
+export function setNapCatWs(ws: any) {
+  _ws = ws;
+}
+
+export function getNapCatWs() {
+  return _ws;
 }
 
 export function getNapCatRuntime() {

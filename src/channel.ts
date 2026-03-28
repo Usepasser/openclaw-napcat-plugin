@@ -1,31 +1,10 @@
 // Minimal NapCat Channel Implementation
 import path from "node:path";
 import { access, copyFile, mkdir, unlink } from "node:fs/promises";
+import { WebSocket } from "ws";
 import { buildNapCatMediaCq, isAudioMedia, resolveLocalFilePath } from "./media.js";
-import { setNapCatConfig } from "./runtime.js";
-
-async function sendToNapCat(url: string, payload: any, token?: string) {
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    const normalizedToken = String(token ?? "").trim();
-    if (normalizedToken) {
-        headers["Authorization"] = `Bearer ${normalizedToken}`;
-    }
-    const res = await fetch(url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(payload)
-    });
-    if (!res.ok) {
-        let body = "";
-        try {
-            body = await res.text();
-        } catch {
-            body = "";
-        }
-        throw new Error(`NapCat API Error: ${res.status} ${res.statusText}${body ? ` | body=${body}` : ""}`);
-    }
-    return await res.json();
-}
+import { setNapCatConfig, getNapCatConfig, setNapCatWs, getNapCatWs } from "./runtime.js";
+import { sendToNapCat, sendToNapCatWS, handleNapCatWebsocket } from "./webhook.js";
 
 async function uploadGroupFileToNapCat(url: string, payload: {
     groupId: string;
@@ -134,6 +113,13 @@ export const napcatPlugin = {
         type: "object",
         properties: {
             url: { type: "string", title: "NapCat HTTP URL", default: "http://127.0.0.1:3000" },
+            connectionMethod: {
+                type: "string",
+                enum: ["http", "websocket"],
+                default: "http",
+                title: "Connection Method",
+                description: "http = HTTP webhook (NapCat→OpenClaw) + API calls (OpenClaw→NapCat); websocket = bidirectional WebSocket connection"
+            },
             agentId: {
                 type: "string",
                 title: "Fixed Agent ID",
@@ -267,10 +253,10 @@ export const napcatPlugin = {
             const config = cfg.channels?.napcat || {};
             const baseUrl = config.url || "http://127.0.0.1:3000";
             const token = String(config.token || "").trim();
-            
+
             let targetType = "private";
             let targetId = to;
-            
+
             if (to.startsWith("group:")) {
                 targetType = "group";
                 targetId = to.replace("group:", "");
@@ -285,19 +271,24 @@ export const napcatPlugin = {
                 targetId = to.replace("session:napcat:group:", "");
             }
 
-            // Fallback for direct user input of ID
-            if (!to.includes(":")) {
-                // If it looks like a group ID (usually same length as user ID, hard to tell)
-                // We default to private if not specified.
-            }
-
             const endpoint = targetType === "group" ? "/send_group_msg" : "/send_private_msg";
             const payload: any = { message: text };
             if (targetType === "group") payload.group_id = targetId;
             else payload.user_id = targetId;
 
             console.log(`[NapCat] Sending to ${targetType} ${targetId}: ${text}`);
-            
+
+            // Try WebSocket first if available
+            const ws = getNapCatWs();
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                try {
+                    await sendToNapCatWS(ws, payload, endpoint, token);
+                    return { ok: true, result: { ws: true } };
+                } catch (err: any) {
+                    console.warn(`[NapCat] WS send failed, falling back to HTTP: ${err.message}`);
+                }
+            }
+
             try {
                 const result = await sendToNapCat(`${baseUrl}${endpoint}`, payload, token);
                 return { ok: true, result };
@@ -411,6 +402,17 @@ export const napcatPlugin = {
 
             console.log(`[NapCat] Sending media to ${targetType} ${targetId}: ${message}`);
 
+            // Try WebSocket first if available
+            const ws = getNapCatWs();
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                try {
+                    await sendToNapCatWS(ws, payload, endpoint, token);
+                    return { ok: true, result: { ws: true } };
+                } catch (err: any) {
+                    console.warn(`[NapCat] WS send failed, falling back to HTTP: ${err.message}`);
+                }
+            }
+
             try {
                 const result = await sendToNapCat(`${baseUrl}${endpoint}`, payload, token);
                 return { ok: true, result };
@@ -420,9 +422,117 @@ export const napcatPlugin = {
         },
     },
     gateway: {
-        startAccount: async () => {
-             console.log("[NapCat] Plugin active. Listening on /napcat");
-             return { stop: () => {} };
+        startAccount: async ({ setStatus, abortSignal }) => {
+            const config = getNapCatConfig();
+            const connectionMethod = config.connectionMethod || "http";
+
+            if (connectionMethod === "websocket") {
+                console.log("[NapCat] WebSocket mode enabled");
+                await startWebSocketMode(config, setStatus, abortSignal);
+            } else {
+                console.log("[NapCat] HTTP mode enabled. Listening on /napcat");
+                await startHttpMode(setStatus, abortSignal);
+            }
         }
     }
+};
+
+async function startHttpMode(setStatus: any, abortSignal: any) {
+    let stopped = false;
+
+    if (!stopped) {
+        setStatus({ connected: true, lastEventAt: Date.now() });
+    }
+
+    const cleanup = () => {
+        stopped = true;
+    };
+
+    if (abortSignal) {
+        abortSignal.addEventListener('abort', cleanup);
+    }
+
+    await new Promise(() => {});
+}
+
+async function startWebSocketMode(config: any, setStatus: any, abortSignal: any) {
+    const baseUrl = config.url || "http://127.0.0.1:3000";
+    const wsUrl = baseUrl.replace('http://', 'ws://').replace('https://', 'wss://');
+    const token = String(config.token || "").trim();
+
+    console.log(`[NapCat] Connecting to WebSocket: ${wsUrl}`);
+
+    let ws: any;
+    let stopped = false;
+    let reconnectAttempts = 0;
+    const maxReconnectAttempts = 10;
+    const baseReconnectDelayMs = 1000;
+
+    const cleanup = () => {
+        stopped = true;
+        if (ws) {
+            ws.close();
+        }
+    };
+
+    if (abortSignal) {
+        abortSignal.addEventListener('abort', cleanup);
+    }
+
+    const connect = async () => {
+        if (stopped) return;
+
+        try {
+            ws = new WebSocket(wsUrl, token ? { headers: { Authorization: `Bearer ${token}` } } : undefined);
+
+            ws.on('open', () => {
+                console.log("[NapCat] WebSocket connected");
+                setStatus({ connected: true, lastEventAt: Date.now() });
+                reconnectAttempts = 0;
+                setNapCatWs(ws);
+            });
+
+            ws.on('message', async (data: any) => {
+                try {
+                    const message = JSON.parse(data.toString());
+                    console.log(`[NapCat] WS received event: ${JSON.stringify(message).substring(0, 100)}`);
+                    await handleNapCatWebsocket(message, config);
+                } catch (err) {
+                    console.error("[NapCat] Failed to process WS message:", err);
+                }
+            });
+
+            ws.on('close', (code: number, reason: Buffer) => {
+                console.log(`[NapCat] WebSocket closed: code=${code} reason=${reason.toString()}`);
+                setNapCatWs(null);
+                if (!stopped) {
+                    reconnectAttempts++;
+                    if (reconnectAttempts <= maxReconnectAttempts) {
+                        const delay = baseReconnectDelayMs * Math.min(reconnectAttempts * 2, 30);
+                        console.log(`[NapCat] Reconnecting in ${delay}ms (attempt ${reconnectAttempts}/${maxReconnectAttempts})`);
+                        setTimeout(connect, delay);
+                    } else {
+                        console.error("[NapCat] Max reconnect attempts reached");
+                        setStatus({ connected: false, lastEventAt: Date.now() });
+                    }
+                }
+            });
+
+            ws.on('error', (err: any) => {
+                console.error("[NapCat] WebSocket error:", err);
+            });
+
+        } catch (err) {
+            console.error("[NapCat] Failed to connect WebSocket:", err);
+            if (!stopped) {
+                reconnectAttempts++;
+                const delay = baseReconnectDelayMs * Math.min(reconnectAttempts * 2, 30);
+                setTimeout(connect, delay);
+            }
+        }
+    };
+
+    await connect();
+
+    await new Promise(() => {});
 };
