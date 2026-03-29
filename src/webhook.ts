@@ -123,7 +123,7 @@ async function buildNapCatMessageFromReply(payload: any, config: any): Promise<s
 }
 
 // Process a NapCat message event (shared by HTTP webhook and WS)
-async function handleNapCatMessageEvent(event: any, config: any): Promise<void> {
+export async function handleNapCatMessageEvent(event: any, config: any): Promise<void> {
     const runtime = getNapCatRuntime();
     const isGroup = event.message_type === "group";
     const groupId = isGroup ? String(event.group_id || "") : "";
