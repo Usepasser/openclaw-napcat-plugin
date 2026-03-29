@@ -1,5 +1,4 @@
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
-// import { OpenClawPluginConfigSchema } from "openclaw/plugin-sdk/core";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { napcatPlugin } from "./src/channel.js";
 import { handleNapCatWebhook } from "./src/webhook.js";
 import { setNapCatRuntime, setNapCatConfig } from "./src/runtime.js";
@@ -11,12 +10,11 @@ const plugin = {
 	name: "NapCatQQ",
 	description: "QQ channel via NapCat (OneBot 11)",
 	configSchema: napcatPlugin.configSchema,
-	setRuntime: setNapCatRuntime,
-	registerFull(api: any) {
+	register(api: OpenClawPluginApi) {
 		registered = true;
+		setNapCatRuntime(api.runtime);
 		const config = api.config.channels?.napcat || {};
 		setNapCatConfig(config);
-		// setNapCatRuntime(api.runtime);
 		api.registerChannel({ plugin: napcatPlugin as any });
 
 		// Only register HTTP handler when using HTTP mode (WebSocket mode uses bidirectional connection)
@@ -39,5 +37,4 @@ const plugin = {
 	},
 };
 
-export default defineChannelPluginEntry(plugin);
-
+export default plugin;

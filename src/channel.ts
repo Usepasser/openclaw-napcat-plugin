@@ -461,19 +461,3 @@ async function startWebSocketMode(config: any, setStatus: any, abortSignal: any)
     // Keep the channel running
     await new Promise(() => {});
 }
-
-    wsClient = new NapCatWebSocket(config, setStatus, abortSignal);
-    wsClient.setMessageHandler(async (event: any) => {
-        await handleNapCatWebsocket(event, config);
-    });
-
-    // Create API client and attach the WebSocket for sending
-    apiClient = new NapCatApiClient(config);
-    apiClient.setWebSocket(wsClient.getWs());
-    setNapCatApiClient(apiClient);
-
-    await wsClient.connect();
-
-    // Keep the channel running
-    await new Promise(() => {});
-}
