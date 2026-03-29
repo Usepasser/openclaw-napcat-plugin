@@ -11,6 +11,7 @@ const plugin = {
 	description: "QQ channel via NapCat (OneBot 11)",
 	configSchema: napcatPlugin.configSchema,
 	register(api: OpenClawPluginApi) {
+		if (registered) return;
 		registered = true;
 		setNapCatRuntime(api.runtime);
 		const config = api.config.channels?.napcat || {};
