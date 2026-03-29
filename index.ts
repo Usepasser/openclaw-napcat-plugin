@@ -14,6 +14,7 @@ const plugin = {
 		registered = true;
 		setNapCatRuntime(api.runtime);
 		const config = api.config.channels?.napcat || {};
+		console.log(config)
 		setNapCatConfig(config);
 		api.registerChannel({ plugin: napcatPlugin as any });
 

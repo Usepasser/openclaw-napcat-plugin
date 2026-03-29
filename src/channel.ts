@@ -451,9 +451,8 @@ async function startWebSocketMode(config: any, setStatus: any, abortSignal: any)
         await handleNapCatWebsocket(event, config);
     });
 
-    // Create API client and attach the WebSocket for sending
+    // Create API client - WS is now obtained dynamically via getNapCatWs()
     apiClient = new NapCatApiClient(config);
-    apiClient.setWebSocket(wsClient.getWs());
     setNapCatApiClient(apiClient);
 
     await wsClient.connect();

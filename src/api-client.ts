@@ -1,5 +1,5 @@
 import { WebSocket } from "ws";
-import { getNapCatConfig } from "./runtime.js";
+import { getNapCatConfig, getNapCatWs } from "./runtime.js";
 
 // Standalone HTTP sender (fallback when apiClient is not available)
 async function postJsonWithNodeHttpStandalone(
@@ -208,11 +208,12 @@ class NapCatApiClient {
     async sendMessage(action: string, params: Record<string, any>): Promise<any> {
         const baseUrl = this.config.url || "http://127.0.0.1:3000";
         const token = String(this.config.token || "").trim();
+        const ws = getNapCatWs();
 
         // Try WebSocket first if available
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
             try {
-                await this.sendViaWebSocket(action, params, token);
+                await this.sendViaWebSocket(ws, action, params, token);
                 return { status: "ok", via: "websocket" };
             } catch (err: any) {
                 console.warn(`[NapCat] WS send failed, falling back to HTTP: ${err.message}`);
@@ -225,18 +226,18 @@ class NapCatApiClient {
     }
 
     // Send via WebSocket using OneBot 11 format
-    private sendViaWebSocket(action: string, params: Record<string, any>, token?: string): Promise<void> {
+    private sendViaWebSocket(ws: any, action: string, params: Record<string, any>, token?: string): Promise<void> {
         return new Promise((resolve, reject) => {
             const obPayload = {
                 action: action.replace("/", ""),
                 params,
             };
             const data = JSON.stringify(obPayload);
-            if (this.ws.readyState !== WebSocket.OPEN) {
+            if (ws.readyState !== WebSocket.OPEN) {
                 reject(new Error("WebSocket not open"));
                 return;
             }
-            this.ws.send(data, (err: any) => {
+            ws.send(data, (err: any) => {
                 if (err) reject(err);
                 else resolve();
             });
